@@ -1,11 +1,13 @@
 import time
 import threading
 import mss
-import numpy as np
-import cv2
 import easyocr
-import tkinter as tk
 from deep_translator import GoogleTranslator
+
+from window import *
+from opencv import *
+from app import *
+
 
 # ===============================
 # CONFIGURAÇÕES
@@ -13,7 +15,6 @@ from deep_translator import GoogleTranslator
 
 UPDATE_INTERVAL = 1.0
 DIFF_THRESHOLD = 3
-
 CAPTURE_AREA = None
 
 # ===============================
@@ -113,27 +114,6 @@ def capturar_tela():
         img = np.array(sct.grab(CAPTURE_AREA))
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
-
-def preprocessar_imagem(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    gray = cv2.resize(
-        gray,
-        None,
-        fx=2.0,
-        fy=2.0,
-        interpolation=cv2.INTER_CUBIC
-    )
-
-    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-    return gray
-
-
-def imagem_mudou(img1, img2):
-    diff = cv2.absdiff(img1, img2)
-    return np.mean(diff) > DIFF_THRESHOLD
-
-
 def extrair_texto(img):
     resultado = reader.readtext(
         img,
@@ -143,7 +123,6 @@ def extrair_texto(img):
         low_text=0.4
     )
     return " ".join(resultado).strip()
-
 
 def traduzir_texto(texto):
     if texto in cache_traducoes:
@@ -165,7 +144,7 @@ def loop_traducao():
     while True:
         frame = capturar_tela()
 
-        if frame_anterior is not None and not imagem_mudou(frame, frame_anterior):
+        if frame_anterior is not None and not imagem_mudou(frame, frame_anterior, DIFF_THRESHOLD):
             time.sleep(UPDATE_INTERVAL)
             continue
 
@@ -186,24 +165,7 @@ def loop_traducao():
 # UI PRINCIPAL
 # ===============================
 
-root = tk.Tk()
-root.title("Tradução de Legendas")
-root.geometry("900x200")
-root.minsize(400, 120)
-
-frame = tk.Frame(root, bg="#111")
-frame.pack(fill=tk.BOTH, expand=True)
-
-label = tk.Label(
-    frame,
-    text=texto_traduzido_atual,
-    fg="white",
-    bg="#111",
-    font=("Segoe UI Semibold", 22),
-    wraplength=860,
-    justify="center"
-)
-label.pack(expand=True, padx=20, pady=20)
+root, frame, label = criar_janela()
 
 # ===============================
 # FLUXO CORRETO
