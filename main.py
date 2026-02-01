@@ -200,6 +200,9 @@ def main():
             # agora roda OCR normal
             texto = extrair_texto(img_proc, cfg)
 
+            if texto:
+                texto = texto.replace("|", "I")
+
             if texto and (precisa_forcar or texto != ultima_legenda):
                 ultima_legenda = texto
                 texto_en_atual = texto
