@@ -1,231 +1,239 @@
 import time
 import threading
 import mss
-import numpy as np
-import cv2
 import easyocr
-import tkinter as tk
+import re
 from deep_translator import GoogleTranslator
 
-# ===============================
-# CONFIGURAÇÕES
-# ===============================
+from opencv import *
 
-UPDATE_INTERVAL = 1.0
-DIFF_THRESHOLD = 3
+from app import App
+from overlay import selecionar_area
 
-CAPTURE_AREA = None
 
-# ===============================
-# OCR / TRADUÇÃO
-# ===============================
+def main():
+    def recapturar_area() -> None:
+        """Configuração de botão. Abre Overlay para o usuário apontar a área de captura de legendas"""
 
-reader = easyocr.Reader(['en'], gpu=False)
-translator = GoogleTranslator(source='en', target='pt')
+        nonlocal CAPTURE_AREA, frame_anterior, ultima_legenda
 
-ultima_legenda = ""
-frame_anterior = None
-cache_traducoes = {}
-texto_traduzido_atual = "Aguardando legendas..."
+        app.update_label("Selecione a área na tela...")
 
-# ===============================
-# SELEÇÃO DE ÁREA (TOPLEVEL)
-# ===============================
+        nova_area = selecionar_area(app, alpha=0.25)
 
-def selecionar_area_tela(root):
-    global CAPTURE_AREA
-
-    CAPTURE_AREA = None
-    print("\n[DEBUG] Iniciando seleção de área")
-
-    overlay = tk.Toplevel(root)
-    overlay.attributes("-fullscreen", True)
-    overlay.attributes("-alpha", 0.3)
-    overlay.configure(bg="black")
-    overlay.lift()
-    overlay.focus_force()
-    overlay.grab_set()
-
-    canvas = tk.Canvas(overlay, cursor="cross", bg="black")
-    canvas.pack(fill=tk.BOTH, expand=True)
-
-    inicio = {"x": None, "y": None, "rect": None}
-
-    def mouse_down(e):
-        print(f"[DEBUG] mouse_down: x={e.x}, y={e.y}")
-        inicio["x"], inicio["y"] = e.x, e.y
-        inicio["rect"] = canvas.create_rectangle(
-            e.x, e.y, e.x, e.y,
-            outline="red", width=2
-        )
-
-    def mouse_move(e):
-        if inicio["rect"] is not None:
-            canvas.coords(inicio["rect"], inicio["x"], inicio["y"], e.x, e.y)
-
-    def mouse_up(e):
-        global CAPTURE_AREA  # 🔑 LINHA CRÍTICA
-
-        print(f"[DEBUG] mouse_up: x={e.x}, y={e.y}")
-        print(f"[DEBUG] inicio: {inicio}")
-
-        if inicio["x"] is None or inicio["y"] is None:
-            print("[DEBUG] mouse_up ignorado")
+        if not nova_area:
+            app.update_label("Seleção cancelada. Mantendo área atual.")
             return
 
-        x1, y1 = inicio["x"], inicio["y"]
-        x2, y2 = e.x, e.y
+        CAPTURE_AREA = nova_area
+        frame_anterior = None
+        ultima_legenda = ""
 
-        width = abs(x2 - x1)
-        height = abs(y2 - y1)
+        print(f'CAPTURE_AREA = {CAPTURE_AREA}')
 
-        print(f"[DEBUG] área calculada: width={width}, height={height}")
+        app.update_label("Área atualizada! Aguardando legendas...")
 
-        if width >= 10 and height >= 10:
-            CAPTURE_AREA = {
-                "left": min(x1, x2),
-                "top": min(y1, y2),
-                "width": width,
-                "height": height
-            }
-            print("[DEBUG] CAPTURE_AREA definida:", CAPTURE_AREA)
+    def pausar_ou_retomar():
+        """Configuração de botão. Interrompe temporariamente a tradução em tempo real"""
+        nonlocal texto_pt_atual
+
+        if pause_event.is_set():
+            # estava pausado -> retoma
+            pause_event.clear()
+            texto_pt_atual = "Retomando..."
+            force_read_event.set()  # força uma leitura imediata
         else:
-            print("[DEBUG] área descartada")
+            # estava rodando -> pausa
+            pause_event.set()
+            texto_pt_atual = "⏸ Tradução pausada"
 
-        overlay.destroy()
+    def ler_novamente() -> None:
+        """Configuração de botão. Força nova leitura do OCR"""
+        force_read_event.set()
 
-    canvas.bind("<ButtonPress-1>", mouse_down)
-    canvas.bind("<B1-Motion>", mouse_move)
-    canvas.bind("<ButtonRelease-1>", mouse_up)
+    def sair() -> None:
+        """Configuração de botão. Encerra o programa"""
+        stop_event.set()
+        app.destroy()
 
-    root.wait_window(overlay)
+    def capturar_tela() -> cv2.typing.MatLike:
+        """Através da utilização da biblioteca mss (Multiple ScreenShot), captura uma seção da tela
+        em formato BGRA (4 canais) e posteriormente converte a imagem OpenCV BGR (3 canais) """
+        if CAPTURE_AREA is None:
+            return None
 
-    print("[DEBUG] Seleção final:", CAPTURE_AREA)
-    return CAPTURE_AREA is not None
+        with mss.mss() as sct:
+            img = np.array(sct.grab(CAPTURE_AREA))
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
+    def extrair_texto(img, conf_min=0.40) -> str:
+        """Identifica e extrai o texto (En-US) na imagem"""
+        resultado = reader.readtext(
+            img,
+            detail=1,
+            paragraph=True,
+            text_threshold=0.7,  # mais permissivo
+            low_text=0.5,  # detecta texto fraco
+            link_threshold=0.4  # ajuda a juntar caracteres próximos (pontuação)
+        )
 
-# ===============================
-# CAPTURA / OCR
-# ===============================
+        textos_validos = []
 
-def capturar_tela():
-    with mss.mss() as sct:
-        img = np.array(sct.grab(CAPTURE_AREA))
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+        for item in resultado:
+            # Formatos possíveis:
+            # 1) (bbox, texto, conf)
+            # 2) (bbox, texto)
+            if len(item) == 3:
+                bbox, texto, conf = item
+            elif len(item) == 2:
+                bbox, texto = item
+                conf = 1.0  # sem score -> assume confiança alta (ou você pode ignorar)
+            else:
+                continue
 
+            if not texto:
+                continue
 
-def preprocessar_imagem(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # conf pode vir como string em alguns casos -> força float
+            try:
+                conf = float(conf)
+            except Exception:
+                conf = 0.0
 
-    gray = cv2.resize(
-        gray,
-        None,
-        fx=2.0,
-        fy=2.0,
-        interpolation=cv2.INTER_CUBIC
-    )
+            if conf < conf_min:
+                continue
 
-    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-    return gray
+            texto = texto.strip()
+            texto = re.sub(r"\s+", " ", texto)
 
+            # ignora lixo: só símbolos ou muito curto
+            if len(texto) < 2:
+                continue
+            if re.fullmatch(r"[\W_]+", texto):
+                continue
 
-def imagem_mudou(img1, img2):
-    diff = cv2.absdiff(img1, img2)
-    return np.mean(diff) > DIFF_THRESHOLD
+            textos_validos.append(texto)
 
+        texto_final = " ".join(textos_validos).strip()
+        texto_final = limpar_pontuacao(texto_final)
+        return texto_final
 
-def extrair_texto(img):
-    resultado = reader.readtext(
-        img,
-        detail=0,
-        paragraph=True,
-        text_threshold=0.7,
-        low_text=0.4
-    )
-    return " ".join(resultado).strip()
+    def limpar_pontuacao(texto: str) -> str:
+        texto = texto.strip()
 
+        # remove espaços antes de pontuação: "hello ," -> "hello,"
+        texto = re.sub(r"\s+([,.;:!?])", r"\1", texto)
 
-def traduzir_texto(texto):
-    if texto in cache_traducoes:
-        return cache_traducoes[texto]
-    try:
-        traducao = translator.translate(texto)
-        cache_traducoes[texto] = traducao
-        return traducao
-    except Exception:
-        return ""
+        # garante espaço depois de pontuação quando necessário: "hello,world" -> "hello, world"
+        texto = re.sub(r"([,.;:!?])([A-Za-z])", r"\1 \2", texto)
 
-# ===============================
-# THREAD OCR
-# ===============================
+        # junta reticências quebradas: ". . ." -> "..."
+        texto = re.sub(r"\.\s*\.\s*\.", "...", texto)
 
-def loop_traducao():
-    global ultima_legenda, frame_anterior, texto_traduzido_atual
+        # junta dois pontos " .. " -> "..."
+        texto = re.sub(r"\.\.", "...", texto)
 
-    while True:
-        frame = capturar_tela()
+        # remove múltiplos espaços
+        texto = re.sub(r"\s+", " ", texto)
 
-        if frame_anterior is not None and not imagem_mudou(frame, frame_anterior):
+        return texto
+
+    def traduzir_texto(texto) -> str:
+        """Envia a string de texto fornecida em En-US para a API de tradução do Google Translator,
+        que retorna a sua versão traduzida em Pt-BR"""
+        if texto in cache_traducoes:
+            return cache_traducoes[texto]
+        try:
+            traducao = translator.translate(texto)
+            cache_traducoes[texto] = traducao
+            return traducao
+
+        except Exception as e:
+            print("Erro na tradução:", e)
+            return ""
+
+    def loop_traducao():
+        """
+        Loop principal doo APP. Coordena a captura a tela, detecta quando a legenda mudou, faz o OCR,
+        traduz a frase lida e atualiza a variável global que exibirá o texto em tela.
+        """
+        nonlocal ultima_legenda, frame_anterior, texto_en_atual, texto_pt_atual
+
+        while not stop_event.is_set():
+
+            # se estiver pausado, não roda OCR
+            if pause_event.is_set():
+                time.sleep(0.1)
+                continue
+
+            frame = capturar_tela()
+            if frame is None:
+                time.sleep(UPDATE_INTERVAL)
+                continue
+
+            precisa_forcar = force_read_event.is_set()
+
+            if (not precisa_forcar) and frame_anterior is not None and not imagem_mudou(frame, frame_anterior,
+                                                                                        DIFF_THRESHOLD):
+                time.sleep(UPDATE_INTERVAL)
+                continue
+
+            frame_anterior = frame.copy()
+
+            force_read_event.clear()
+
+            img_proc = preprocessar_imagem(frame)
+            texto = extrair_texto(img_proc)
+
+            if texto and (precisa_forcar or texto != ultima_legenda):
+                ultima_legenda = texto
+                texto_en_atual = texto
+
+                traducao = traduzir_texto(texto)
+                if traducao:
+                    texto_pt_atual = traducao
+
             time.sleep(UPDATE_INTERVAL)
-            continue
 
-        frame_anterior = frame.copy()
+    UPDATE_INTERVAL = 0.1
+    DIFF_THRESHOLD = 1
+    CAPTURE_AREA = None
 
-        img_proc = preprocessar_imagem(frame)
-        texto = extrair_texto(img_proc)
+    ultima_legenda = ""
+    frame_anterior = None
+    cache_traducoes = {}
+    texto_en_atual = "Aguardando legenda (EN)..."
+    texto_pt_atual = "Aguardando tradução (PT)..."
 
-        if texto and texto != ultima_legenda:
-            ultima_legenda = texto
-            traducao = traduzir_texto(texto)
-            if traducao:
-                texto_traduzido_atual = traducao
+    app = App(recapturar_area, pausar_ou_retomar, ler_novamente, sair)
 
-        time.sleep(UPDATE_INTERVAL)
+    reader = easyocr.Reader(['en'], gpu=False)
+    translator = GoogleTranslator(source='en', target='pt')
 
-# ===============================
-# UI PRINCIPAL
-# ===============================
+    stop_event = threading.Event()
+    force_read_event = threading.Event()
+    pause_event = threading.Event()  # quando setado => pausado
 
-root = tk.Tk()
-root.title("Tradução de Legendas")
-root.geometry("900x200")
-root.minsize(400, 120)
+    app.update_label("Selecione a área das legendas...")
+    CAPTURE_AREA = selecionar_area(app)
 
-frame = tk.Frame(root, bg="#111")
-frame.pack(fill=tk.BOTH, expand=True)
+    if not CAPTURE_AREA:
+        app.update_label("Área inválida ou cancelada.\nFechando...")
+        app.after(1500, app.destroy)
+        app.mainloop()
+        return
 
-label = tk.Label(
-    frame,
-    text=texto_traduzido_atual,
-    fg="white",
-    bg="#111",
-    font=("Segoe UI Semibold", 22),
-    wraplength=860,
-    justify="center"
-)
-label.pack(expand=True, padx=20, pady=20)
+    thread = threading.Thread(target=loop_traducao, daemon=True)
+    thread.start()
 
-# ===============================
-# FLUXO CORRETO
-# ===============================
+    def update_app():
+        app.update_labels(texto_en_atual, texto_pt_atual)
+        app.after(200, update_app)
 
-# 1️⃣ selecionar área (bloqueante)
-ok = selecionar_area_tela(root)
+    update_app()
 
-if not ok:
-    label.config(text="Área de captura inválida.\nFechando o programa.")
-    root.after(2000, root.destroy)
-    root.mainloop()
-    exit()
+    app.mainloop()
 
-# 2️⃣ iniciar OCR só depois da área válida
-thread = threading.Thread(target=loop_traducao, daemon=True)
-thread.start()
 
-# 3️⃣ atualizar UI
-def atualizar_ui():
-    label.config(text=texto_traduzido_atual)
-    root.after(200, atualizar_ui)
-
-atualizar_ui()
-root.mainloop()
+if __name__ == "__main__":
+    main()
