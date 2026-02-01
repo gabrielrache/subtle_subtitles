@@ -23,7 +23,8 @@ class App(tk.Tk):
     def update_labels(self, texto_en, texto_pt):
         self.main.update_labels(texto_en, texto_pt)
 
-
+    def update_preview(self, png_bytes: bytes):
+        self.main.update_preview(png_bytes)
 
 
 class Menu(ttk.Frame):
@@ -58,17 +59,15 @@ class Main(ttk.Frame):
 
         self.place(x=0.0, y=0, relwidth=1, relheight=0.9)
 
+        self._tk_preview_img = None  # referência obrigatória
+
         # Label do texto original (inglês)
         self.label_en = tk.Label(
             self,
-            text="Aguardando legenda (EN)...",
-            fg="#dddddd",
+            text="Prévia OCR (imagem)",
             bg="#111",
-            font=("Segoe UI Semibold", 18),
-            wraplength=860,
-            justify="center"
         )
-        self.label_en.pack(expand=False, fill="both", padx=10, pady=(30, 10))
+        self.label_en.pack(expand=False, fill="both", padx=10, pady=(10, 5))
 
         # Label do texto traduzido (português)
         self.label_pt = tk.Label(
@@ -89,5 +88,11 @@ class Main(ttk.Frame):
     def update_label(self, texto):
         self.label_pt.config(text=texto)
 
+    def update_preview(self, png_bytes: bytes):
+        if not png_bytes:
+            return
+
+        self._tk_preview_img = tk.PhotoImage(data=png_bytes)
+        self.label_en.config(image=self._tk_preview_img, text="")
 
 # App()

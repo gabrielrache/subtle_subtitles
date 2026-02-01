@@ -5,7 +5,7 @@ import re
 
 from app import App
 from overlay import selecionar_area
-from opencv import capturar_tela, preprocessar_imagem, imagem_mudou
+from opencv import capturar_tela, preprocessar_imagem, imagem_mudou, gerar_preview_ocr, cv2_to_png_bytes
 from deep_translator import GoogleTranslator
 
 
@@ -186,6 +186,17 @@ def main():
             force_read_event.clear()
 
             img_proc = preprocessar_imagem(frame)
+
+            # gera preview da imagem que vai pro OCR
+            preview = gerar_preview_ocr(img_proc, aplicar_threshold=True, inverter=False)
+
+            # converte para PNG bytes
+            png_bytes = cv2_to_png_bytes(preview)
+
+            # manda para UI com segurança (Tkinter só no main thread)
+            app.after(0, app.update_preview, png_bytes)
+
+            # agora roda OCR normal
             texto = extrair_texto(img_proc)
 
             if texto and (precisa_forcar or texto != ultima_legenda):
@@ -207,7 +218,7 @@ def main():
 
     # Constantes
     UPDATE_INTERVAL = 0.1
-    DIFF_THRESHOLD = 1
+    DIFF_THRESHOLD = 4
     CAPTURE_AREA = None
 
     # Variáveis
