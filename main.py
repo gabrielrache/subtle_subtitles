@@ -1,19 +1,19 @@
 import time
 import threading
-import mss
 import easyocr
 import re
-from deep_translator import GoogleTranslator
-
-from opencv import *
 
 from app import App
 from overlay import selecionar_area
+from opencv import capturar_tela, preprocessar_imagem, imagem_mudou
+from deep_translator import GoogleTranslator
 
 
 def main():
     def recapturar_area() -> None:
-        """Configuração de botão. Abre Overlay para o usuário apontar a área de captura de legendas"""
+        """
+        Configuração de botão. Abre Overlay para o usuário apontar a área de captura de legendas
+        """
 
         nonlocal CAPTURE_AREA, frame_anterior, ultima_legenda
 
@@ -34,7 +34,9 @@ def main():
         app.update_label("Área atualizada! Aguardando legendas...")
 
     def pausar_ou_retomar():
-        """Configuração de botão. Interrompe temporariamente a tradução em tempo real"""
+        """
+        Configuração de botão. Interrompe temporariamente a tradução em tempo real
+        """
         nonlocal texto_pt_atual
 
         if pause_event.is_set():
@@ -48,26 +50,22 @@ def main():
             texto_pt_atual = "⏸ Tradução pausada"
 
     def ler_novamente() -> None:
-        """Configuração de botão. Força nova leitura do OCR"""
+        """
+        Configuração de botão. Força nova leitura do OCR
+        """
         force_read_event.set()
 
     def sair() -> None:
-        """Configuração de botão. Encerra o programa"""
+        """
+        Configuração de botão. Encerra o programa
+        """
         stop_event.set()
         app.destroy()
 
-    def capturar_tela() -> cv2.typing.MatLike:
-        """Através da utilização da biblioteca mss (Multiple ScreenShot), captura uma seção da tela
-        em formato BGRA (4 canais) e posteriormente converte a imagem OpenCV BGR (3 canais) """
-        if CAPTURE_AREA is None:
-            return None
-
-        with mss.mss() as sct:
-            img = np.array(sct.grab(CAPTURE_AREA))
-            return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-
     def extrair_texto(img, conf_min=0.40) -> str:
-        """Identifica e extrai o texto (En-US) na imagem"""
+        """
+        Identifica e extrai o texto (En-US) na imagem
+        """
         resultado = reader.readtext(
             img,
             detail=1,
@@ -119,6 +117,9 @@ def main():
         return texto_final
 
     def limpar_pontuacao(texto: str) -> str:
+        """
+        Realiza pós processamento do texto para aprimor caracteres de pontuação
+        """
         texto = texto.strip()
 
         # remove espaços antes de pontuação: "hello ," -> "hello,"
@@ -139,8 +140,10 @@ def main():
         return texto
 
     def traduzir_texto(texto) -> str:
-        """Envia a string de texto fornecida em En-US para a API de tradução do Google Translator,
-        que retorna a sua versão traduzida em Pt-BR"""
+        """
+        Envia a string de texto fornecida em En-US para a API de tradução do Google Translator,
+        que retorna a sua versão traduzida em Pt-BR
+        """
         if texto in cache_traducoes:
             return cache_traducoes[texto]
         try:
@@ -152,7 +155,7 @@ def main():
             print("Erro na tradução:", e)
             return ""
 
-    def loop_traducao():
+    def loop_traducao() -> None:
         """
         Loop principal doo APP. Coordena a captura a tela, detecta quando a legenda mudou, faz o OCR,
         traduz a frase lida e atualiza a variável global que exibirá o texto em tela.
@@ -166,7 +169,7 @@ def main():
                 time.sleep(0.1)
                 continue
 
-            frame = capturar_tela()
+            frame = capturar_tela(CAPTURE_AREA)
             if frame is None:
                 time.sleep(UPDATE_INTERVAL)
                 continue
@@ -195,25 +198,38 @@ def main():
 
             time.sleep(UPDATE_INTERVAL)
 
+    def update_app() -> None:
+        """
+        Atualiza labels da janela principal do App conforme as legendas são lidas e armazenadas
+        """
+        app.update_labels(texto_en_atual, texto_pt_atual)
+        app.after(200, update_app)
+
+    # Constantes
     UPDATE_INTERVAL = 0.1
     DIFF_THRESHOLD = 1
     CAPTURE_AREA = None
 
+    # Variáveis
     ultima_legenda = ""
     frame_anterior = None
     cache_traducoes = {}
     texto_en_atual = "Aguardando legenda (EN)..."
     texto_pt_atual = "Aguardando tradução (PT)..."
 
+    # Instâncias
     app = App(recapturar_area, pausar_ou_retomar, ler_novamente, sair)
 
     reader = easyocr.Reader(['en'], gpu=False)
     translator = GoogleTranslator(source='en', target='pt')
 
+    # Eventos
     stop_event = threading.Event()
     force_read_event = threading.Event()
     pause_event = threading.Event()  # quando setado => pausado
 
+
+    # Run
     app.update_label("Selecione a área das legendas...")
     CAPTURE_AREA = selecionar_area(app)
 
@@ -226,12 +242,7 @@ def main():
     thread = threading.Thread(target=loop_traducao, daemon=True)
     thread.start()
 
-    def update_app():
-        app.update_labels(texto_en_atual, texto_pt_atual)
-        app.after(200, update_app)
-
     update_app()
-
     app.mainloop()
 
 
