@@ -5,7 +5,7 @@ import re
 
 from app import App
 from overlay import selecionar_area
-from opencv import capturar_tela, preprocessar_imagem, imagem_mudou, gerar_preview_ocr, cv2_to_png_bytes
+from opencv import CONFIG, capturar_tela, preprocessar_imagem, imagem_mudou, gerar_preview_ocr, cv2_to_png_bytes
 from deep_translator import GoogleTranslator
 
 
@@ -17,12 +17,12 @@ def main():
 
         nonlocal CAPTURE_AREA, frame_anterior, ultima_legenda
 
-        app.update_label("Selecione a área na tela...")
+        app.update_texts("Selecione a área na tela...", "")
 
         nova_area = selecionar_area(app, alpha=0.25)
 
         if not nova_area:
-            app.update_label("Seleção cancelada. Mantendo área atual.")
+            app.update_texts("Seleção cancelada. Mantendo área atual.", "")
             return
 
         CAPTURE_AREA = nova_area
@@ -31,7 +31,7 @@ def main():
 
         print(f'CAPTURE_AREA = {CAPTURE_AREA}')
 
-        app.update_label("Área atualizada! Aguardando legendas...")
+        app.update_texts("Área atualizada! Aguardando legendas...", "")
 
     def pausar_ou_retomar():
         """
@@ -62,17 +62,17 @@ def main():
         stop_event.set()
         app.destroy()
 
-    def extrair_texto(img, conf_min=0.40) -> str:
+    def extrair_texto(img, cfg, conf_min=0.40) -> str:
         """
         Identifica e extrai o texto (En-US) na imagem
         """
         resultado = reader.readtext(
             img,
             detail=1,
-            paragraph=True,
-            text_threshold=0.7,  # mais permissivo
-            low_text=0.5,  # detecta texto fraco
-            link_threshold=0.4  # ajuda a juntar caracteres próximos (pontuação)
+            paragraph=False,
+            text_threshold=cfg.text_threshold,
+            low_text=cfg.low_text,
+            link_threshold=cfg.link_threshold
         )
 
         textos_validos = []
@@ -169,6 +169,8 @@ def main():
                 time.sleep(0.1)
                 continue
 
+            cfg = CONFIG.get()
+
             frame = capturar_tela(CAPTURE_AREA)
             if frame is None:
                 time.sleep(UPDATE_INTERVAL)
@@ -176,8 +178,7 @@ def main():
 
             precisa_forcar = force_read_event.is_set()
 
-            if (not precisa_forcar) and frame_anterior is not None and not imagem_mudou(frame, frame_anterior,
-                                                                                        DIFF_THRESHOLD):
+            if (not precisa_forcar) and frame_anterior is not None and not imagem_mudou(frame, frame_anterior, cfg.diff_threshold):
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
@@ -185,19 +186,19 @@ def main():
 
             force_read_event.clear()
 
-            img_proc = preprocessar_imagem(frame)
+            img_proc = preprocessar_imagem(frame, cfg)
 
             # gera preview da imagem que vai pro OCR
-            preview = gerar_preview_ocr(img_proc, aplicar_threshold=True, inverter=False)
+            preview = gerar_preview_ocr(img_proc, cfg)
 
             # converte para PNG bytes
-            png_bytes = cv2_to_png_bytes(preview)
+            png = cv2_to_png_bytes(preview)
 
             # manda para UI com segurança (Tkinter só no main thread)
-            app.after(0, app.update_preview, png_bytes)
+            app.after(0, app.update_preview, png)
 
             # agora roda OCR normal
-            texto = extrair_texto(img_proc)
+            texto = extrair_texto(img_proc, cfg)
 
             if texto and (precisa_forcar or texto != ultima_legenda):
                 ultima_legenda = texto
@@ -213,12 +214,11 @@ def main():
         """
         Atualiza labels da janela principal do App conforme as legendas são lidas e armazenadas
         """
-        app.update_labels(texto_en_atual, texto_pt_atual)
-        app.after(200, update_app)
+        app.update_texts(texto_en_atual, texto_pt_atual)
+        app.after(500, update_app)
 
     # Constantes
-    UPDATE_INTERVAL = 0.1
-    DIFF_THRESHOLD = 4
+    UPDATE_INTERVAL = 0.7
     CAPTURE_AREA = None
 
     # Variáveis
@@ -241,11 +241,11 @@ def main():
 
 
     # Run
-    app.update_label("Selecione a área das legendas...")
+    app.update_texts("Selecione a área das legendas...", "")
     CAPTURE_AREA = selecionar_area(app)
 
     if not CAPTURE_AREA:
-        app.update_label("Área inválida ou cancelada.\nFechando...")
+        app.update_texts("Área inválida ou cancelada.\nFechando...", "")
         app.after(1500, app.destroy)
         app.mainloop()
         return
