@@ -1,6 +1,10 @@
 import tkinter as tk
 from tkinter import ttk
+import re
+
 from opencv import CONFIG
+from dictionary import buscar_significado_pt
+
 
 class App(tk.Tk):
     def __init__(self, recapturar_callback, toggle_pause_callback, ler_callback, sair_callback):
@@ -135,6 +139,8 @@ class Main(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
 
+        self.parent = parent  # <-- IMPORTANTE: referência ao App (Tk)
+
         self.place(x=0, y=0, relwidth=1, relheight=0.9)
 
         self._tk_preview_img = None
@@ -159,21 +165,27 @@ class Main(ttk.Frame):
         )
         self.label_en.pack(expand=False, fill="both", padx=10, pady=(0, 5))
 
-        # tradução PT
-        self.label_pt = tk.Label(
+        self.text_pt = tk.Text(
             self,
-            text="Aguardando tradução (PT)...",
-            fg="white",
+            height=4,
             bg="#111",
-            font=("Segoe UI Semibold", 20),
-            wraplength=960,
-            justify="center"
+            fg="white",
+            font=("Segoe UI Semibold", 22),
+            wrap="word",
+            relief="flat",
+            bd=0
         )
-        self.label_pt.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.text_pt.pack(expand=True, fill="both", padx=10, pady=(0, 30))
 
-    def update_texts(self, texto_en: str, texto_pt: str):
+        # deixa somente leitura (mas vamos habilitar temporariamente quando atualizar)
+        self.text_pt.config(state="disabled")
+
+    def update_texts(self, texto_en, texto_pt):
+        # label/preview EN continua como está
         self.label_en.config(text=texto_en)
-        self.label_pt.config(text=texto_pt)
+
+        # tradução clicável
+        self.update_translation_clickable(texto_pt)
 
     def update_preview(self, png_bytes: bytes):
         if not png_bytes:
@@ -181,6 +193,141 @@ class Main(ttk.Frame):
 
         self._tk_preview_img = tk.PhotoImage(data=png_bytes)
         self.label_preview.config(image=self._tk_preview_img, text="")
+
+    # ==========================================================
+    # NOVO: popup no MESMO MONITOR do app, abrindo sobre o programa
+    # ==========================================================
+    def _abrir_janela_significado(self, palavra: str):
+        palavra = (palavra or "").strip()
+        if not palavra:
+            return
+
+        # cria o popup como filho do App (isso já ajuda bastante)
+        win = tk.Toplevel(self.parent)
+        win.title(f"Significado: {palavra}")
+        win.minsize(420, 260)
+        win.resizable(True, True)
+
+        # mantém "associado" ao App (mesmo grupo de janelas)
+        win.transient(self.parent)
+
+        # abre por cima, mas sem travar o app
+        try:
+            win.attributes("-topmost", True)
+            win.after(250, lambda: win.attributes("-topmost", False))
+        except Exception:
+            pass
+
+        # ==========================================================
+        # POSICIONAMENTO GARANTIDO SOBRE O APP (monitor correto)
+        # ==========================================================
+        def posicionar_sobre_app():
+            # garante geometria atualizada
+            self.parent.update_idletasks()
+            win.update_idletasks()
+
+            # tenta pegar a geometria real do app: "1000x700+1920+120"
+            geo = self.parent.wm_geometry()
+
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geo)
+            if not m:
+                # fallback seguro
+                app_x = self.parent.winfo_rootx()
+                app_y = self.parent.winfo_rooty()
+                app_w = self.parent.winfo_width()
+                app_h = self.parent.winfo_height()
+            else:
+                app_w = int(m.group(1))
+                app_h = int(m.group(2))
+                app_x = int(m.group(3))
+                app_y = int(m.group(4))
+
+            w, h = 600, 380
+            x = app_x + (app_w // 2) - (w // 2)
+            y = app_y + (app_h // 2) - (h // 2)
+
+            win.geometry(f"{w}x{h}+{x}+{y}")
+
+            try:
+                win.lift()
+                win.focus_force()
+            except Exception:
+                pass
+
+        # agenda para depois do Tk realmente "materializar" a janela
+        win.after(1, posicionar_sobre_app)
+
+        # UI
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text=f"Palavra: {palavra}",
+            font=("Segoe UI", 12, "bold")
+        ).pack(anchor="w")
+
+        txt = tk.Text(frame, wrap="word", font=("Segoe UI", 11))
+        txt.pack(expand=True, fill="both", pady=(10, 10))
+
+        txt.insert("1.0", "Consultando dicionário...")
+        txt.config(state="disabled")
+
+        def carregar():
+            significado = buscar_significado_pt(palavra)
+            txt.config(state="normal")
+            txt.delete("1.0", "end")
+            txt.insert("1.0", significado)
+            txt.config(state="disabled")
+
+        win.after(50, carregar)
+
+        ttk.Button(frame, text="Fechar", command=win.destroy).pack(anchor="e")
+
+    def update_translation_clickable(self, texto_pt: str):
+        """
+        Renderiza o texto traduzido com palavras clicáveis.
+        """
+        self.text_pt.config(state="normal")
+        self.text_pt.delete("1.0", "end")
+
+        if not texto_pt:
+            self.text_pt.insert("1.0", "")
+            self.text_pt.config(state="disabled")
+            return
+
+        # separa em tokens mantendo pontuação
+        tokens = re.findall(r"\w+|[^\w\s]", texto_pt, re.UNICODE)
+
+        for i, token in enumerate(tokens):
+            if re.fullmatch(r"\w+", token, re.UNICODE):
+                tag = f"w_{i}_{token}"
+
+                self.text_pt.insert("end", token, (tag,))
+                self.text_pt.tag_config(tag, underline=False)
+
+                # cursor de link
+                self.text_pt.tag_bind(tag, "<Enter>", lambda e: self.text_pt.config(cursor="hand2"))
+                self.text_pt.tag_bind(tag, "<Leave>", lambda e: self.text_pt.config(cursor=""))
+
+                # clique -> abre significado
+                self.text_pt.tag_bind(
+                    tag,
+                    "<Button-1>",
+                    lambda e, palavra=token: self._abrir_janela_significado(palavra)
+                )
+            else:
+                self.text_pt.insert("end", token)
+
+            # adiciona espaço entre palavras (mas não antes de pontuação)
+            if i < len(tokens) - 1:
+                nxt = tokens[i + 1]
+                if re.fullmatch(r"[.,;:!?)]", nxt):
+                    pass
+                else:
+                    self.text_pt.insert("end", " ")
+
+        self.text_pt.config(state="disabled")
 
 
 class Tooltip:
