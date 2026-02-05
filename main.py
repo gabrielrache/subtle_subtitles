@@ -43,10 +43,11 @@ def main():
             # estava pausado -> retoma
             pause_event.clear()
             texto_pt_atual = "Retomando..."
-            force_read_event.set()  # força uma leitura imediata
+            force_read_event.set()  # força uma leitura imediata ao retomar
         else:
             # estava rodando -> pausa
             pause_event.set()
+            force_read_event.clear()  # evita OCR pendente
             texto_pt_atual = "⏸ Tradução pausada"
 
     def ler_novamente() -> None:
@@ -220,8 +221,27 @@ def main():
         app.update_texts(texto_en_atual, texto_pt_atual)
         app.after(500, update_app)
 
+    def on_texto_editado(texto_editado: str):
+        """
+        Chamado quando o usuário edita manualmente o texto OCR
+        """
+        nonlocal texto_en_atual, texto_pt_atual, ultima_legenda
+
+        # pausa o sistema (igual ao botão)
+        if not pause_event.is_set():
+            pause_event.set()
+
+        force_read_event.clear()
+
+        texto_en_atual = texto_editado
+        ultima_legenda = texto_editado  # evita reprocessar OCR antigo
+
+        traducao = traduzir_texto(texto_editado)
+        if traducao:
+            texto_pt_atual = traducao
+
     # Constantes
-    UPDATE_INTERVAL = 0.7
+    UPDATE_INTERVAL = 2
     CAPTURE_AREA = None
 
     # Variáveis
@@ -233,6 +253,7 @@ def main():
 
     # Instâncias
     app = App(recapturar_area, pausar_ou_retomar, ler_novamente, sair)
+    app.registrar_callback_edicao(on_texto_editado)
 
     reader = easyocr.Reader(['en'], gpu=False)
     translator = GoogleTranslator(source='en', target='pt')

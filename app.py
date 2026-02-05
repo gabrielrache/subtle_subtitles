@@ -11,8 +11,9 @@ class App(tk.Tk):
         super().__init__()
 
         self.title("Tradução de Legendas")
-        self.geometry("1000x700")
-        self.minsize(1000, 700)
+        self.geometry("1000x600")
+        self.minsize(1000, 600)
+        self.on_texto_en_editado = None
 
         # callbacks do main.py
         self.recapturar_area = recapturar_callback
@@ -30,6 +31,8 @@ class App(tk.Tk):
     def update_preview(self, png_bytes: bytes):
         self.main.update_preview(png_bytes)
 
+    def registrar_callback_edicao(self, callback):
+        self.on_texto_en_editado = callback
 
 class Menu(ttk.Frame):
     def __init__(self, parent):
@@ -139,11 +142,14 @@ class Main(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
 
-        self.parent = parent  # <-- IMPORTANTE: referência ao App (Tk)
+        self.parent = parent  # <-- referência ao App (Tk)
 
         self.place(x=0, y=0, relwidth=1, relheight=0.9)
 
         self._tk_preview_img = None
+
+        self.texto_en_atual = ""
+        self._editando_en = False
 
         # preview da imagem do OCR
         self.label_preview = tk.Label(
@@ -159,11 +165,51 @@ class Main(ttk.Frame):
             text="Aguardando legenda (EN)...",
             fg="#dddddd",
             bg="#111",
-            font=("Segoe UI Semibold", 14),
+            font=("Segoe UI Semibold", 16),  # ⬆ fonte maior
             wraplength=960,
-            justify="center"
+            justify="center",
+            pady=12  # ⬆ altura visual
         )
+
         self.label_en.pack(expand=False, fill="both", padx=10, pady=(0, 5))
+
+        self.label_en.bind("<Button-1>", self._entrar_modo_edicao)
+
+        # ===== Widgets de edição inline (inicialmente ocultos) =====
+        self.edit_frame = tk.Frame(
+            self,
+            bg="#1e90ff",
+            highlightthickness=2,
+            highlightbackground="#1e90ff"
+        )
+
+        self.edit_inner = tk.Frame(self.edit_frame, bg="#111")
+        self.edit_inner.pack(fill="both", expand=True, padx=3, pady=3)
+
+        self.entry_en = tk.Entry(
+            self.edit_inner,
+            font=("Segoe UI Semibold", 16),  # ⬆ mesma fonte do label
+            justify="center",
+            relief="flat"
+        )
+        self.entry_en.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(10, 6),
+            pady=10  # ⬆ aumenta altura de digitação
+        )
+
+        self.btn_apply = ttk.Button(
+            self.edit_inner,
+            text="Aplicar",
+            command=self._confirmar_edicao
+        )
+        self.btn_apply.pack(
+            side="right",
+            padx=(6, 10),
+            pady=8  # ⬆ botão mais alto
+        )
 
         self.text_pt = tk.Text(
             self,
@@ -180,11 +226,48 @@ class Main(ttk.Frame):
         # deixa somente leitura (mas vamos habilitar temporariamente quando atualizar)
         self.text_pt.config(state="disabled")
 
-    def update_texts(self, texto_en, texto_pt):
-        # label/preview EN continua como está
-        self.label_en.config(text=texto_en)
+    def _entrar_modo_edicao(self, _event=None):
+        if self._editando_en:
+            return
 
-        # tradução clicável
+        self._editando_en = True
+
+        # pausa o sistema (replica botão Pausar)
+        self.master.toggle_pause()
+
+        self.edit_frame.place(
+            in_=self.label_en,
+            x=0,
+            y=0,
+            relwidth=1,
+            relheight=1
+        )
+
+        self.entry_en.delete(0, "end")
+        self.entry_en.insert(0, self.texto_en_atual)
+        self.entry_en.icursor("end")
+        self.entry_en.focus_set()
+
+    def _confirmar_edicao(self, _event=None):
+        novo_texto = self.entry_en.get().strip()
+
+        if not novo_texto:
+            self._cancelar_edicao()
+            return
+
+        # encerra edição visual
+        self.edit_frame.place_forget()
+        self._editando_en = False
+
+        # notifica o main.py (estado real do sistema)
+        if self.parent.on_texto_en_editado:
+            self.parent.on_texto_en_editado(novo_texto)
+
+    def update_texts(self, texto_en, texto_pt):
+        if not self._editando_en:
+            self.texto_en_atual = texto_en
+            self.label_en.config(text=texto_en)
+
         self.update_translation_clickable(texto_pt)
 
     def update_preview(self, png_bytes: bytes):
@@ -194,9 +277,6 @@ class Main(ttk.Frame):
         self._tk_preview_img = tk.PhotoImage(data=png_bytes)
         self.label_preview.config(image=self._tk_preview_img, text="")
 
-    # ==========================================================
-    # NOVO: popup no MESMO MONITOR do app, abrindo sobre o programa
-    # ==========================================================
     def _abrir_janela_significado(self, palavra: str):
         palavra = (palavra or "").strip()
         if not palavra:
@@ -328,6 +408,10 @@ class Main(ttk.Frame):
                     self.text_pt.insert("end", " ")
 
         self.text_pt.config(state="disabled")
+
+    def _cancelar_edicao(self, _event=None):
+        self.edit_frame.place_forget()
+        self._editando_en = False
 
 
 class Tooltip:
