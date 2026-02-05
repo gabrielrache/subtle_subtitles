@@ -186,30 +186,47 @@ class Main(ttk.Frame):
         self.edit_inner = tk.Frame(self.edit_frame, bg="#111")
         self.edit_inner.pack(fill="both", expand=True, padx=3, pady=3)
 
-        self.entry_en = tk.Entry(
+        # ===== Área de texto (esquerda) =====
+        self.text_edit = tk.Text(
             self.edit_inner,
-            font=("Segoe UI Semibold", 16),  # ⬆ mesma fonte do label
-            justify="center",
-            relief="flat"
+            font=("Segoe UI Semibold", 16),
+            wrap="word",
+            relief="flat",
+            bg="#111",
+            fg="white",
+            insertbackground="white",
+            insertwidth=2
         )
-        self.entry_en.pack(
+
+        self.text_edit.bind("<Return>", self._confirmar_edicao)
+
+        # Shift+Enter quebra linha normalmente
+        self.text_edit.bind("<Shift-Return>", self._quebra_linha)
+
+        # ===== Área do botão =====
+        btn_frame = tk.Frame(self.edit_inner, bg="#111")
+
+        btn_frame.pack(
+            side="right",
+            fill="y",
+            padx=(6, 10),
+            pady=10
+        )
+
+        self.text_edit.pack(
             side="left",
             fill="both",
             expand=True,
             padx=(10, 6),
-            pady=10  # ⬆ aumenta altura de digitação
+            pady=10
         )
 
         self.btn_apply = ttk.Button(
-            self.edit_inner,
+            btn_frame,
             text="Aplicar",
             command=self._confirmar_edicao
         )
-        self.btn_apply.pack(
-            side="right",
-            padx=(6, 10),
-            pady=8  # ⬆ botão mais alto
-        )
+        self.btn_apply.pack(fill="x", ipady=6)
 
         self.text_pt = tk.Text(
             self,
@@ -232,34 +249,49 @@ class Main(ttk.Frame):
 
         self._editando_en = True
 
-        # pausa o sistema (replica botão Pausar)
+        # pausa o sistema
         self.master.toggle_pause()
 
+        # garante layout pronto
+        self.update_idletasks()
+
+        y_inicio = self.label_en.winfo_y()
+        altura_total = self.winfo_height() - y_inicio - 10  # margem inferior
+
         self.edit_frame.place(
-            in_=self.label_en,
-            x=0,
-            y=0,
-            relwidth=1,
-            relheight=1
+            x=10,
+            y=y_inicio,
+            relwidth=1.0,
+            width=-20,
+            height=altura_total
         )
 
-        self.entry_en.delete(0, "end")
-        self.entry_en.insert(0, self.texto_en_atual)
-        self.entry_en.icursor("end")
-        self.entry_en.focus_set()
+        self.text_edit.delete("1.0", "end")
+        self.text_edit.insert("1.0", self.texto_en_atual)
+        self.text_edit.focus_set()
+        self.text_edit.mark_set("insert", "end")
+        self.text_edit.see("insert")
+
+        # self.after(100, self._debug_layout)
 
     def _confirmar_edicao(self, _event=None):
-        novo_texto = self.entry_en.get().strip()
+        novo_texto = self.text_edit.get("1.0", "end").strip()
 
         if not novo_texto:
             self._cancelar_edicao()
             return
 
-        # encerra edição visual
+        # atualiza estado interno
+        self.texto_en_atual = novo_texto
+
+        # atualiza UI
+        self.label_en.config(text=novo_texto)
+
+        # fecha editor
         self.edit_frame.place_forget()
         self._editando_en = False
 
-        # notifica o main.py (estado real do sistema)
+        # avisa o main.py (se registrado)
         if self.parent.on_texto_en_editado:
             self.parent.on_texto_en_editado(novo_texto)
 
@@ -412,6 +444,33 @@ class Main(ttk.Frame):
     def _cancelar_edicao(self, _event=None):
         self.edit_frame.place_forget()
         self._editando_en = False
+
+    def _quebra_linha(self, event):
+        self.text_edit.insert("insert", "\n")
+        return "break"
+
+    def _debug_layout(self):
+        print("\n=== DEBUG LAYOUT ===")
+
+        print("edit_frame:")
+        print("  exists:", self.edit_frame.winfo_exists())
+        print("  mapped:", self.edit_frame.winfo_ismapped())
+        print("  geom:", self.edit_frame.winfo_geometry())
+        print("  size:", self.edit_frame.winfo_width(), self.edit_frame.winfo_height())
+
+        print("edit_inner:")
+        print("  geom:", self.edit_inner.winfo_geometry())
+        print("  size:", self.edit_inner.winfo_width(), self.edit_inner.winfo_height())
+
+        print("text_edit:")
+        print("  geom:", self.text_edit.winfo_geometry())
+        print("  size:", self.text_edit.winfo_width(), self.text_edit.winfo_height())
+
+        print("btn_apply:")
+        print("  exists:", self.btn_apply.winfo_exists())
+        print("  mapped:", self.btn_apply.winfo_ismapped())
+        print("  geom:", self.btn_apply.winfo_geometry())
+        print("  size:", self.btn_apply.winfo_width(), self.btn_apply.winfo_height())
 
 
 class Tooltip:
