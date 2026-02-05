@@ -167,6 +167,7 @@ def main():
 
             # se estiver pausado, não roda OCR
             if pause_event.is_set():
+                print("⏸ Loop pausado")
                 time.sleep(0.1)
                 continue
 
@@ -222,19 +223,18 @@ def main():
         app.after(500, update_app)
 
     def on_texto_editado(texto_editado: str):
-        """
-        Chamado quando o usuário edita manualmente o texto OCR
-        """
         nonlocal texto_en_atual, texto_pt_atual, ultima_legenda
 
-        # pausa o sistema (igual ao botão)
-        if not pause_event.is_set():
-            pause_event.set()
+        # garante que o sistema esteja rodando
+        pause_event.clear()
 
+        print("▶ Sistema ativo após edição")
+
+        # limpa leitura forçada pendente
         force_read_event.clear()
 
         texto_en_atual = texto_editado
-        ultima_legenda = texto_editado  # evita reprocessar OCR antigo
+        ultima_legenda = texto_editado
 
         traducao = traduzir_texto(texto_editado)
         if traducao:

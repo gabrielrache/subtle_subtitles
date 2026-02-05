@@ -249,9 +249,6 @@ class Main(ttk.Frame):
 
         self._editando_en = True
 
-        # pausa o sistema
-        self.master.toggle_pause()
-
         # garante layout pronto
         self.update_idletasks()
 
